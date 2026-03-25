@@ -1,9 +1,10 @@
 // Package httpapi provides HTTP handlers and server wiring for the JWKS service.
 package httpapi
+
 import (
 	"net/http"
 
-	"jwks-server/internal/keys"
+	"jwks-server/internal/db"
 )
 
 // Server is a lightweight HTTP server wrapper for the JWKS service.
@@ -12,9 +13,9 @@ type Server struct {
 }
 
 // NewServer creates a Server with routes for JWKS and auth endpoints.
-func NewServer(km *keys.KeyManager) *Server {
+func NewServer(store *db.DB) *Server {
 	mux := http.NewServeMux()
-	h := Handlers{KM: km}
+	h := Handlers{DB: store}
 
 	mux.HandleFunc("/.well-known/jwks.json", h.JWKS)
 	mux.HandleFunc("/jwks", h.JWKS)

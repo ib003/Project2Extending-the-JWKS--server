@@ -1,11 +1,14 @@
+// Package httpapi provides HTTP handlers and server wiring for the JWKS service.
 package httpapi
 
 import (
 	"crypto/rsa"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"jwks-server/internal/db"
 	"jwks-server/internal/jwks"
 	"jwks-server/internal/keys"
 	"jwks-server/internal/tokens"
@@ -13,7 +16,7 @@ import (
 
 // Handlers implements the HTTP endpoint handlers for the JWKS server.
 type Handlers struct {
-	KM *keys.KeyManager
+	DB *db.DB
 }
 
 // JWKS serves a JWKS document containing only unexpired public keys.
@@ -23,31 +26,39 @@ func (h Handlers) JWKS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := time.Now().UTC()
-	active := h.KM.Active()
+	records, err := h.DB.GetValidKeys()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 
-	if !h.KM.IsExpired(active, now) {
-		j := jwks.BuildJWKS([]struct {
-			KID string
-			Pub *rsa.PublicKey
-		}{
-			{KID: active.KID, Pub: &active.Priv.PublicKey},
-		})
+	jwkInputs := make([]struct {
+		KID string
+		Pub *rsa.PublicKey
+	}, 0, len(records))
 
-		out, err := jwks.MarshalJWKS(j)
+	for _, rec := range records {
+		priv, err := keys.PEMToPrivateKey(rec.Key)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(out)
+		jwkInputs = append(jwkInputs, struct {
+			KID string
+			Pub *rsa.PublicKey
+		}{
+			KID: strconv.Itoa(rec.Kid),
+			Pub: &priv.PublicKey,
+		})
+	}
+
+	out, err := jwks.MarshalJWKS(jwks.BuildJWKS(jwkInputs))
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	// If active key is expired (shouldn't happen normally), return an empty JWKS.
-	out, _ := jwks.MarshalJWKS(jwks.JWKS{Keys: []jwks.JWK{}})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
@@ -66,24 +77,36 @@ func (h Handlers) Auth(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UTC()
 
-	var rec keys.KeyRecord
+	var rec db.KeyRecord
+	var err error
 	var jwtExp time.Time
 
 	if useExpired {
-		rec = h.KM.Expired()
+		rec, err = h.DB.GetExpiredKey()
 		jwtExp = now.Add(-5 * time.Minute)
 	} else {
-		rec = h.KM.Active()
+		rec, err = h.DB.GetValidKey()
 		jwtExp = now.Add(5 * time.Minute)
 	}
 
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	priv, err := keys.PEMToPrivateKey(rec.Key)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
 	tokenStr, err := tokens.IssueJWT(tokens.IssueInput{
-		KID:      rec.KID,
-		PrivKey:  rec.Priv,
+		KID:      strconv.Itoa(rec.Kid),
+		PrivKey:  priv,
 		Expires:  jwtExp,
-		Subject:  "mock-user",
+		Subject:  "userABC",
 		Issuer:   "jwks-server",
-		Audience: "test-client",
+		Audience: "project2-client",
 	})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)

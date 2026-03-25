@@ -7,19 +7,51 @@ import (
 	"testing"
 	"time"
 
+	"jwks-server/internal/db"
 	"jwks-server/internal/httpapi"
 	"jwks-server/internal/keys"
 )
 
-func TestJWKS_ReturnsEmptyWhenActiveExpired(t *testing.T) {
-	km, err := keys.NewDefaultKeyManager()
+func setupHandlersTestDB(t *testing.T) *db.DB {
+	t.Helper()
+
+	store, err := db.NewDB(":memory:")
 	if err != nil {
-		t.Fatalf("keys init: %v", err)
+		t.Fatalf("NewDB: %v", err)
 	}
 
-	km.SetActiveExpiryForTest(time.Now().UTC().Add(-1 * time.Hour))
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
 
-	h := httpapi.Handlers{KM: km}
+	validPriv, err := keys.GenerateRSAKey()
+	if err != nil {
+		t.Fatalf("GenerateRSAKey valid: %v", err)
+	}
+	if err := store.InsertKey(
+		keys.PrivateKeyToPEM(validPriv),
+		time.Now().Add(2*time.Hour).Unix(),
+	); err != nil {
+		t.Fatalf("InsertKey valid: %v", err)
+	}
+
+	expiredPriv, err := keys.GenerateRSAKey()
+	if err != nil {
+		t.Fatalf("GenerateRSAKey expired: %v", err)
+	}
+	if err := store.InsertKey(
+		keys.PrivateKeyToPEM(expiredPriv),
+		time.Now().Add(-2*time.Hour).Unix(),
+	); err != nil {
+		t.Fatalf("InsertKey expired: %v", err)
+	}
+
+	return store
+}
+
+func TestJWKS_WithValidKeyReturnsKeysField(t *testing.T) {
+	store := setupHandlersTestDB(t)
+	h := httpapi.Handlers{DB: store}
 
 	req := httptest.NewRequest(http.MethodGet, "/jwks", nil)
 	rr := httptest.NewRecorder()
@@ -33,14 +65,14 @@ func TestJWKS_ReturnsEmptyWhenActiveExpired(t *testing.T) {
 	if !strings.Contains(body, `"keys"`) {
 		t.Fatalf("expected keys field in JWKS, got: %s", body)
 	}
-	if strings.Contains(body, `"kid"`) {
-		t.Fatalf("expected empty JWKS when active expired, got: %s", body)
+	if !strings.Contains(body, `"kid"`) {
+		t.Fatalf("expected at least one valid JWK, got: %s", body)
 	}
 }
 
 func TestAuth_ExpiredFalseAndZeroAreTreatedAsNotExpired(t *testing.T) {
-	km, _ := keys.NewDefaultKeyManager()
-	h := httpapi.Handlers{KM: km}
+	store := setupHandlersTestDB(t)
+	h := httpapi.Handlers{DB: store}
 
 	for _, q := range []string{"expired=false", "expired=0"} {
 		req := httptest.NewRequest(http.MethodPost, "/auth?"+q, nil)
@@ -59,8 +91,8 @@ func TestAuth_ExpiredFalseAndZeroAreTreatedAsNotExpired(t *testing.T) {
 }
 
 func TestAuth_ExpiredWeirdValueCountsAsExpired(t *testing.T) {
-	km, _ := keys.NewDefaultKeyManager()
-	h := httpapi.Handlers{KM: km}
+	store := setupHandlersTestDB(t)
+	h := httpapi.Handlers{DB: store}
 
 	req := httptest.NewRequest(http.MethodPost, "/auth?expired=yes", nil)
 	rr := httptest.NewRecorder()

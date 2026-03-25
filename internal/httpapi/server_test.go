@@ -5,14 +5,55 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"jwks-server/internal/db"
 	"jwks-server/internal/httpapi"
 	"jwks-server/internal/keys"
 )
 
+func setupTestDB(t *testing.T) *db.DB {
+	t.Helper()
+
+	store, err := db.NewDB(":memory:")
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+
+	if err := store.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Insert one valid key
+	validPriv, err := keys.GenerateRSAKey()
+	if err != nil {
+		t.Fatalf("GenerateRSAKey valid: %v", err)
+	}
+	if err := store.InsertKey(
+		keys.PrivateKeyToPEM(validPriv),
+		time.Now().Add(2*time.Hour).Unix(),
+	); err != nil {
+		t.Fatalf("InsertKey valid: %v", err)
+	}
+
+	// Insert one expired key
+	expiredPriv, err := keys.GenerateRSAKey()
+	if err != nil {
+		t.Fatalf("GenerateRSAKey expired: %v", err)
+	}
+	if err := store.InsertKey(
+		keys.PrivateKeyToPEM(expiredPriv),
+		time.Now().Add(-2*time.Hour).Unix(),
+	); err != nil {
+		t.Fatalf("InsertKey expired: %v", err)
+	}
+
+	return store
+}
+
 func TestServer_RoutesJWKSPaths(t *testing.T) {
-	km, _ := keys.NewDefaultKeyManager()
-	s := httpapi.NewServer(km)
+	store := setupTestDB(t)
+	s := httpapi.NewServer(store)
 
 	req1 := httptest.NewRequest(http.MethodGet, "/.well-known/jwks.json", nil)
 	rr1 := httptest.NewRecorder()
@@ -33,8 +74,8 @@ func TestServer_RoutesJWKSPaths(t *testing.T) {
 }
 
 func TestServer_RoutesAuthAnd405(t *testing.T) {
-	km, _ := keys.NewDefaultKeyManager()
-	s := httpapi.NewServer(km)
+	store := setupTestDB(t)
+	s := httpapi.NewServer(store)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth", nil)
 	rr := httptest.NewRecorder()

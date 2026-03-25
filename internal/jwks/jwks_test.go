@@ -48,3 +48,10 @@ func TestMarshalJWKS_HasRequiredFields(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildJWKS_EmptyInput(t *testing.T) {
+	j := jwks.BuildJWKS(nil)
+	if len(j.Keys) != 0 {
+		t.Fatalf("expected empty JWKS, got %d keys", len(j.Keys))
+	}
+}
