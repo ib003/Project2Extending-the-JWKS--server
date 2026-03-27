@@ -19,4 +19,5 @@ dist/
 
 # IDE
 .vscode/
-.idea/
+.idea/gradebot
+*.db
