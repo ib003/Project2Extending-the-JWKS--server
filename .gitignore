@@ -21,3 +21,5 @@ dist/
 .vscode/
 .idea/gradebot
 *.db
+gradebot
+*.db
